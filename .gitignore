@@ -1,0 +1,7 @@
+# real employee data, never commit
+phone_input.csv
+*.csv
+phone_step*.csv
+
+# macOS
+.DS_Store

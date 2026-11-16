@@ -6,8 +6,13 @@
 # Output: /tmp/phone_step3_saruman.csv  (adds saruman columns + eligible flag)
 #
 # In saruman the phone number is auth_user.username; OperationUser hangs off it
-# (WFM User.saruman_id == saruman auth_user.id).  saruman_exists = TRUE means
-# the number is held by SOMEONE ELSE.
+# (WFM User.saruman_id == saruman auth_user.id).  Hub managers reach saruman
+# through the valinor employee sync, which never writes saruman_id back to
+# workforce.  When saruman_id is blank the account is found through
+# OperationUser.valinor_employee_id == WFM User.valinor_id, and the resolved id
+# is written to the saruman_id column with saruman_id_source = valinor_lookup
+# so steps 4 and 6 can use it.
+# saruman_exists = TRUE means the number is held by SOMEONE ELSE.
 # eligible = TRUE only when valinor_exists = FALSE and saruman_exists = FALSE.
 # ---------------------------------------------------------------------------
 import csv
@@ -19,7 +24,7 @@ from ecommerce.models import OperationUser
 IN_PATH = '/tmp/phone_step2_valinor.csv'
 OUT_PATH = '/tmp/phone_step3_saruman.csv'
 
-OUT_FIELDS = ['user_id', 'valinor_id', 'saruman_id', 'name', 'status',
+OUT_FIELDS = ['user_id', 'valinor_id', 'saruman_id', 'saruman_id_source', 'name', 'status',
               'current_phone', 'new_phone', 'wfm_already_updated',
               'valinor_employee_found', 'valinor_current_phone',
               'valinor_exists', 'valinor_conflict',
@@ -54,11 +59,21 @@ def run(in_path=IN_PATH, out_path=OUT_PATH):
     print("STEP 3 | saruman check | input={} rows={}".format(in_path, len(rows)))
     print("=" * 110)
     out_rows = []
-    stats = {'total': 0, 'free': 0, 'exists': 0, 'no_saruman_id': 0,
+    stats = {'total': 0, 'free': 0, 'exists': 0, 'via_valinor': 0, 'no_saruman_id': 0,
              'user_missing': 0, 'eligible': 0}
     for idx, row in enumerate(rows, start=1):
         stats['total'] += 1
         saruman_id = as_int(row.get('saruman_id'))
+        valinor_id = as_int(row.get('valinor_id'))
+        saruman_id_source = 'workforce' if saruman_id else ''
+        if not saruman_id and valinor_id:
+            linked = OperationUser.objects.filter(valinor_employee_id=valinor_id).first()
+            if linked:
+                saruman_id = linked.user_id
+                saruman_id_source = 'valinor_lookup'
+                stats['via_valinor'] += 1
+                print("Row {}: LOOKUP - workforce user {} has no saruman_id; valinor employee {} -> saruman user {}".format(
+                    idx, row.get('user_id'), valinor_id, saruman_id))
         new_phone = normalise_phone(row.get('new_phone'))
         variations = phone_variations(new_phone)
         own_user = AuthUser.objects.filter(id=saruman_id).first() if saruman_id else None
@@ -95,6 +110,8 @@ def run(in_path=IN_PATH, out_path=OUT_PATH):
         if eligible:
             stats['eligible'] += 1
         out_row = dict(row)
+        out_row['saruman_id'] = saruman_id or ''
+        out_row['saruman_id_source'] = saruman_id_source
         out_row['saruman_user_found'] = 'TRUE' if own_user else 'FALSE'
         out_row['saruman_current_phone'] = saruman_current
         out_row['saruman_role'] = saruman_role
@@ -110,7 +127,8 @@ def run(in_path=IN_PATH, out_path=OUT_PATH):
     print("rows read                  : {}".format(stats['total']))
     print("saruman_exists = FALSE     : {}".format(stats['free']))
     print("saruman_exists = TRUE      : {}".format(stats['exists']))
-    print("rows with no saruman_id    : {}".format(stats['no_saruman_id']))
+    print("saruman_id via valinor     : {}".format(stats['via_valinor']))
+    print("no saruman_id (unresolved) : {}".format(stats['no_saruman_id']))
     print("saruman user missing       : {}".format(stats['user_missing']))
     print("ELIGIBLE for update        : {}".format(stats['eligible']))
     print("wrote {} -> feed this to STEPS 4, 5 and 6".format(out_path))

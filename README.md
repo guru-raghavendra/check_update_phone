@@ -16,6 +16,16 @@ Linkage: workforce `User.valinor_id` → valinor `core.Employee.id`;
 workforce `User.saruman_id` → saruman `auth_user.id` (and
 `OperationUser.valinor_employee_id` → valinor `Employee.id`).
 
+Workforce only writes `saruman_id` back from the DC_GC user sync. Hub
+managers reach saruman through the valinor employee sync instead, so their
+workforce row has `saruman_id = NULL` even though a saruman account exists.
+Step 3 therefore falls back to `OperationUser.valinor_employee_id =
+User.valinor_id` when `saruman_id` is blank, writes the resolved id into the
+`saruman_id` column and marks `saruman_id_source = valinor_lookup`; step 6
+then updates the account, and step 4 fills `User.saruman_id` in workforce so
+the next run finds it directly (`FILL_SARUMAN_ID = False` in step 4 turns
+that off).
+
 The three DBs are **not** kept in sync by a phone edit — `User.save()` in
 workforce fires no sync signal — which is why all three are updated separately.
 
@@ -77,6 +87,12 @@ different services.
   number already correct on their own row does not read as a conflict).
 - `eligible` — `TRUE` only when `valinor_exists = FALSE` **and**
   `saruman_exists = FALSE`. Steps 4/5/6 touch only these rows.
+- `saruman_id_source` — `workforce` when `User.saruman_id` was set, `valinor_lookup`
+  when step 3 resolved it through `OperationUser.valinor_employee_id`, blank when
+  neither found a saruman account.
+- `saruman_id_result` (step 4 output) — what step 4 did with `User.saruman_id` for
+  `valinor_lookup` rows: `WILL_SET` / `SET`, `already`, `kept` (workforce had a
+  different id), or `taken by user_id=…` (unique clash, left alone).
 - `wfm_already_updated`, `valinor_current_phone`, `saruman_current_phone` — what
   each system holds today, for eyeballing before commit.
 
